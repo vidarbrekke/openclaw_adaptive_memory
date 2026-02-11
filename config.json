@@ -1,0 +1,12 @@
+{
+  "enableAdaptiveMemory": true,
+  "searchTopK": 3,
+  "minRelevanceScore": 0.5,
+  "debounceMs": 500,
+  "fallbackBehavior": "continue_without_context",
+  "memoryDir": "~/clawd/memory",
+  "useVectorSearch": true,
+  "maxResultsPerSearch": 10,
+  "enableLogging": true,
+  "logLevel": "info"
+}

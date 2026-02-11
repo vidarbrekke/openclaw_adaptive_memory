@@ -1,0 +1,23 @@
+{
+  "name": "adaptive-memory",
+  "version": "0.1.0",
+  "description": "On-demand memory loading for OpenClaw sessions",
+  "main": "hook.js",
+  "scripts": {
+    "test": "node test.js",
+    "search": "node search.js",
+    "hook": "node hook.js",
+    "install": "bash install.sh"
+  },
+  "keywords": [
+    "openclaw",
+    "memory",
+    "vector-search",
+    "session-optimization"
+  ],
+  "author": "Vidar Brekke",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
