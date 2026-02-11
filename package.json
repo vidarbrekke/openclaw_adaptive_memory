@@ -5,6 +5,7 @@
   "main": "hook.js",
   "scripts": {
     "test": "node test.js",
+    "integration-test": "node integration-test.js",
     "search": "node search.js",
     "hook": "node hook.js",
     "install": "bash install.sh"

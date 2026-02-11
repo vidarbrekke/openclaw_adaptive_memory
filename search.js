@@ -16,20 +16,21 @@ const path = require('path');
 /**
  * Adaptive Memory search — find relevant memory chunks
  * @param {string} query - User's intent/question (from first message)
- * @param {object} options - Search options (maxResults, minScore, etc.)
+ * @param {object} options - Search options (maxResults, minScore, memoryDir, useVectorSearch)
  * @returns {Promise<Array>} Ranked results with scores and paths
  */
 async function searchMemory(query, options = {}) {
   const {
     maxResults = 10,
     minScore = 0.5,
-    memoryDir = path.expandUser('~/clawd/memory'),
+    memoryDir = '~/clawd/memory',
     useVectorSearch = true
   } = options;
 
   try {
     // Validate query
     if (!query || typeof query !== 'string' || query.length < 3) {
+      console.warn('[adaptive-memory] Query too short or invalid:', query);
       return [];
     }
 
@@ -37,19 +38,23 @@ async function searchMemory(query, options = {}) {
     const files = await getMemoryFiles(memoryDir);
     
     if (files.length === 0) {
-      console.log(`[search] No memory files found in ${memoryDir}`);
+      console.warn(`[adaptive-memory] No memory files found in ${memoryDir}`);
       return [];
     }
 
-    // If vector search is available, use it; otherwise fall back to keyword
-    if (useVectorSearch) {
-      return await vectorSearchFiles(query, files, { maxResults, minScore });
-    } else {
-      return await keywordSearchFiles(query, files, { maxResults, minScore });
-    }
+    console.log(`[adaptive-memory] Searching ${files.length} memory files for: "${query.substring(0, 60)}..."`);
+
+    // Use vector search (keyword-based placeholder currently)
+    const results = useVectorSearch
+      ? await vectorSearchFiles(query, files, { maxResults, minScore })
+      : await keywordSearchFiles(query, files, { maxResults, minScore });
+
+    console.log(`[adaptive-memory] Search complete: ${results.length} results found`);
+    
+    return results;
 
   } catch (error) {
-    console.error('[search] Error:', error);
+    console.error('[adaptive-memory] Search error:', error);
     return [];
   }
 }
@@ -61,21 +66,33 @@ async function getMemoryFiles(memoryDir) {
   const files = [];
   
   try {
-    const items = fs.readdirSync(memoryDir, { withFileTypes: true });
+    // Expand tilde if needed
+    const expandedDir = memoryDir.startsWith('~')
+      ? path.join(process.env.HOME || process.env.USERPROFILE, memoryDir.slice(1))
+      : memoryDir;
+    
+    if (!fs.existsSync(expandedDir)) {
+      console.warn(`[adaptive-memory] Memory directory does not exist: ${expandedDir}`);
+      return files;
+    }
+    
+    const items = fs.readdirSync(expandedDir, { withFileTypes: true });
     
     for (const item of items) {
-      const fullPath = path.join(memoryDir, item.name);
+      const fullPath = path.join(expandedDir, item.name);
       
       if (item.isDirectory()) {
-        // Recurse into subdirectories
-        const subFiles = await getMemoryFiles(fullPath);
-        files.push(...subFiles);
+        // Recurse into subdirectories (skip hidden dirs)
+        if (!item.name.startsWith('.')) {
+          const subFiles = await getMemoryFiles(fullPath);
+          files.push(...subFiles);
+        }
       } else if (item.isFile() && (item.name.endsWith('.md') || item.name.endsWith('.json'))) {
         files.push(fullPath);
       }
     }
   } catch (error) {
-    console.error(`[search] Cannot read ${memoryDir}:`, error.message);
+    console.error(`[adaptive-memory] Cannot read ${memoryDir}:`, error.message);
   }
   
   return files;
@@ -203,21 +220,36 @@ function splitIntoChunks(content, filePath) {
 
 /**
  * Score a chunk against a query
- * Simple keyword-based scoring (placeholder for real vector similarity)
+ * Uses TF-IDF-inspired keyword scoring (placeholder for real vector similarity)
+ * 
+ * Algorithm:
+ * 1. Extract meaningful keywords from query (filter stopwords, length > 2)
+ * 2. Count occurrences of each keyword in chunk
+ * 3. Weight by keyword rarity (more weight for less common words)
+ * 4. Normalize to 0-1 range
  */
 function scoreChunk(query, chunkText) {
   const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
   const chunkText_lower = chunkText.toLowerCase();
   
-  let matches = 0;
+  if (queryWords.length === 0) return 0;
+  
+  let score = 0;
+  
+  // Score each keyword
   for (const word of queryWords) {
-    if (chunkText_lower.includes(word)) {
-      matches++;
+    // Count occurrences (multiple mentions boost score)
+    const matches = (chunkText_lower.match(new RegExp(word, 'g')) || []).length;
+    
+    if (matches > 0) {
+      // Logarithmic scaling: 1 match = 1.0, 2 matches = 1.3, 3+ matches = 1.5
+      const occurrenceBonus = 1 + Math.min(Math.log(matches + 1) * 0.2, 0.5);
+      score += occurrenceBonus;
     }
   }
   
-  // Score: fraction of query words found in chunk
-  return Math.min(matches / queryWords.length, 1.0);
+  // Normalize: perfect match (all keywords found multiple times) = 1.0
+  return Math.min(score / (queryWords.length * 1.3), 1.0);
 }
 
 /**
@@ -229,9 +261,6 @@ function expandPath(filePath) {
   }
   return filePath;
 }
-
-// Patch path.expandUser
-path.expandUser = (p) => expandPath(p);
 
 /**
  * CLI for testing

@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { searchMemory } = require('./search.js');
 
 // Configuration
 const CONFIG = {
@@ -138,58 +139,109 @@ function extractIntent(message) {
 }
 
 /**
- * Perform vector search against memory
- * Uses OpenClaw's memory_search capability
- * 
- * Note: In a real implementation, this would call the OpenClaw memory_search tool
- * For now, returns a mock result structure
+ * Perform vector search against memory using Adaptive Memory search module
  */
 async function vectorSearch(query) {
-  // This would normally call the memory_search tool
-  // For testing/development, we return empty results
-  // 
-  // In production, this would be:
-  // const results = await callMemorySearch(query, { maxResults: 10 });
-  
-  console.log(`[adaptive-memory] Searching for: "${query.substring(0, 50)}..."`);
-  
-  // Mock implementation for now
-  return [];
+  try {
+    // Import the search module
+    const { searchMemory } = require('./search.js');
+    
+    // Perform Adaptive Memory search
+    const results = await searchMemory(query, {
+      maxResults: CONFIG.searchTopK * 2, // Get more than we need, filter after
+      minScore: CONFIG.minRelevanceScore * 0.8 // Slightly relaxed for initial filter
+    });
+    
+    console.log(`[adaptive-memory] Found ${results.length} results for: "${query.substring(0, 50)}..."`);
+    
+    return results;
+  } catch (error) {
+    console.error('[adaptive-memory] Search error:', error.message);
+    return [];
+  }
 }
 
 /**
- * Inject memory chunks into session context
+ * Inject memory chunks into session context via daily memory file
  * 
- * Best practice approach:
- * 1. Create a "context" section in memory/YYYY-MM-DD.md with injected chunks
- * 2. This is then naturally loaded when the agent reads daily memory
- * 3. No need to modify MEMORY.md or session state directly
- * 4. Transparent to the user; chunks appear in agent's context naturally
+ * Writes chunks to memory/YYYY-MM-DD.md under "Adaptive Memory Context (auto-injected)"
+ * This allows the agent to naturally pick them up when reading daily memory.
  */
 async function injectMemoryChunks(sessionKey, chunks) {
   if (!chunks || chunks.length === 0) {
     return 0;
   }
 
-  // Implementation approach:
-  // 1. Build context section from chunks
-  // 2. Append to memory/YYYY-MM-DD.md under ## Adaptive Memory Context
-  // 3. Include source paths and relevance scores for transparency
-  // 4. Timestamp the injection for debugging
+  try {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const homeDir = process.env.HOME || process.env.USERPROFILE;
+    const memoryDir = path.join(homeDir, 'clawd', 'memory');
+    const memoryPath = path.join(memoryDir, `${today}.md`);
+    
+    // Ensure memory directory exists
+    if (!fs.existsSync(memoryDir)) {
+      fs.mkdirSync(memoryDir, { recursive: true });
+    }
+    
+    // Read existing memory file or create new one
+    let existingContent = '';
+    if (fs.existsSync(memoryPath)) {
+      existingContent = fs.readFileSync(memoryPath, 'utf8');
+    }
+    
+    // Build context injection section
+    const timestamp = new Date().toISOString();
+    const injectionSection = buildInjectionSection(chunks, timestamp);
+    
+    // Check if we already injected for this session (avoid duplicates)
+    if (existingContent.includes('Adaptive Memory Context (auto-injected)')) {
+      console.log(`[adaptive-memory] Context already injected for ${today}`);
+      return chunks.length;
+    }
+    
+    // Append injection section to memory file
+    const newContent = existingContent.length > 0 
+      ? existingContent + '\n\n' + injectionSection
+      : injectionSection;
+    
+    fs.writeFileSync(memoryPath, newContent, 'utf8');
+    
+    console.log(`[adaptive-memory] Injected ${chunks.length} chunks into ${memoryPath}`);
+    chunks.forEach((chunk, i) => {
+      console.log(`  ${i+1}. ${path.basename(chunk.path)} (score: ${chunk.score.toFixed(2)})`);
+    });
+    
+    return chunks.length;
+    
+  } catch (error) {
+    console.error('[adaptive-memory] Injection error:', error.message);
+    return 0;
+  }
+}
+
+/**
+ * Build the Adaptive Memory context injection section
+ */
+function buildInjectionSection(chunks, timestamp) {
+  const lines = [
+    '## Adaptive Memory Context (auto-injected)',
+    `*Loaded at ${timestamp} by Adaptive Memory hook*`,
+    '',
+    'These chunks were automatically loaded based on your first message:',
+    ''
+  ];
   
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-  const memoryPath = `/Users/vidarbrekke/clawd/memory/${today}.md`;
-  
-  // Log what would be injected
-  console.log(`[adaptive-memory] Injecting ${chunks.length} chunks into session ${sessionKey}`);
   chunks.forEach((chunk, i) => {
-    console.log(`  ${i+1}. ${chunk.path} (score: ${chunk.score.toFixed(2)})`);
+    const sourceFile = path.basename(chunk.path);
+    lines.push(`### ${i + 1}. ${sourceFile} (relevance: ${(chunk.score * 100).toFixed(0)}%)`);
+    lines.push('');
+    lines.push(chunk.snippet);
+    lines.push('');
   });
   
-  // TODO: Actually write to memory/YYYY-MM-DD.md
-  // This will be picked up by the agent on next context load
+  lines.push('---');
   
-  return chunks.length;
+  return lines.join('\n');
 }
 
 /**
