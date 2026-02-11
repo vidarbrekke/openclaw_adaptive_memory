@@ -30,7 +30,9 @@ const { searchMemory } = require('./search.js');
 const DEFAULTS = {
   enableAdaptiveMemory: true,
   searchTopK: 3,
+  maxResultsPerSearch: 12,
   minRelevanceScore: 0.55,
+  useVectorSearch: true,
   debounceMs: 500,
   fallbackBehavior: 'continue_without_context',
 
@@ -144,10 +146,10 @@ async function onFirstMessage({ sessionKey, message, context = {} }) {
 
     // Search memory — fetch more than needed, then filter
     const results = await searchMemory(intent, {
-      maxResults: Math.max(CONFIG.searchTopK * 3, 10),
+      maxResults: CONFIG.maxResultsPerSearch || Math.max(CONFIG.searchTopK * 3, 10),
       minScore: CONFIG.minRelevanceScore * 0.8,  // relaxed initial filter
       memoryDir: CONFIG.memoryDir,
-      useVectorSearch: true,
+      useVectorSearch: CONFIG.useVectorSearch,
     });
 
     // Apply strict threshold

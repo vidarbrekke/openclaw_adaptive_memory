@@ -51,6 +51,7 @@ let testsRun = 0;
 let testsPassed = 0;
 let testsFailed = 0;
 const failures = [];
+const pendingTests = [];
 
 function describe(name, fn) {
   console.log(`\n${name}`);
@@ -64,9 +65,10 @@ function test(name, fn) {
     const result = fn();
     // Handle async tests
     if (result && typeof result.then === 'function') {
-      return result
+      pendingTests.push(result
         .then(() => { testsPassed++; console.log(`  \u2713 ${name}`); })
-        .catch(err => { testsFailed++; failures.push({ name, err }); console.log(`  \u2717 ${name}: ${err.message}`); });
+        .catch(err => { testsFailed++; failures.push({ name, err }); console.log(`  \u2717 ${name}: ${err.message}`); }));
+      return;
     }
     testsPassed++;
     console.log(`  \u2713 ${name}`);
@@ -482,8 +484,7 @@ describe('searchMemory API', () => {
 // Run & report
 // ---------------------------------------------------------------------------
 
-// Collect async test promises by wrapping the describe blocks
-setTimeout(() => {
+Promise.allSettled(pendingTests).then(() => {
   fs.rmSync(TEST_OUTPUT_DIR, { recursive: true, force: true });
   console.log('\n' + '='.repeat(60));
   console.log(`Tests: ${testsPassed}/${testsRun} passed`);
@@ -495,4 +496,4 @@ setTimeout(() => {
     console.log('All tests passed!');
     process.exit(0);
   }
-}, 3000);
+});

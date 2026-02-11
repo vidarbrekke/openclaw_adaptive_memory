@@ -21,7 +21,7 @@ const os = require('os');
 // Cache
 // ---------------------------------------------------------------------------
 
-const DEFAULT_CACHE_DIR = path.join(os.homedir(), '.clawd');
+const DEFAULT_CACHE_DIR = path.join(os.homedir(), '.openclaw');
 const DEFAULT_CACHE_PATH = path.join(DEFAULT_CACHE_DIR, 'adaptive-memory-cache.json');
 
 async function loadCache(cachePath) {

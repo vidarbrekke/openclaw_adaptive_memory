@@ -52,6 +52,7 @@ Edit `config.json` in this folder to customize behavior:
 {
   "enableAdaptiveMemory": true,
   "searchTopK": 3,
+  "maxResultsPerSearch": 12,
   "minRelevanceScore": 0.55,
   "maxInjectedCharsTotal": 4000,
   "maxSnippetCharsEach": 800,
@@ -66,6 +67,7 @@ Edit `config.json` in this folder to customize behavior:
 - `enableAdaptiveMemory` — Toggle feature on/off (default: true)
 - `memoryDir` — Where daily memory files live (default: `~/.openclaw/memory`)
 - `searchTopK` — Number of memory chunks to retrieve (default: 3)
+- `maxResultsPerSearch` — Initial search pool before top-K slicing (default: 12)
 - `minRelevanceScore` — Filter low-relevance results (default: 0.55, range 0-1)
 - `maxInjectedCharsTotal` — Cap total injected characters (default: 4000)
 - `maxSnippetCharsEach` — Cap per-snippet characters (default: 800)

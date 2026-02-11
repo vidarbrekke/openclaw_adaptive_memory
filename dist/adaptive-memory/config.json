@@ -9,5 +9,6 @@
   "fallbackBehavior": "continue_without_context",
   "useVectorSearch": true,
   "enableLogging": true,
-  "logLevel": "info"
+  "logLevel": "info",
+  "maxResultsPerSearch": 12
 }

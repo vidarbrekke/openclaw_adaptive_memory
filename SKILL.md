@@ -27,6 +27,7 @@ Edit `config.json`:
 | `enableAdaptiveMemory` | `true` | Master switch |
 | `memoryDir` | `~/.openclaw/memory` | Where daily memory and sources live |
 | `searchTopK` | `3` | Chunks to inject |
+| `maxResultsPerSearch` | `12` | Initial search pool before top-K slicing |
 | `minRelevanceScore` | `0.55` | Score threshold (0–1) |
 | `maxInjectedCharsTotal` | `4000` | Cap total injected chars |
 | `maxSnippetCharsEach` | `800` | Cap per-snippet chars |
