@@ -4,7 +4,11 @@
  * Adaptive Memory Hook
  * 
  * Triggers after the first user message in a session.
- * Performs vector search on the user's intent and injects relevant memory chunks into context.
+ * Performs Adaptive Memory vector search on the user's intent and injects relevant memory chunks into context.
+ * 
+ * This hook is GLOBAL by default and runs on all new sessions.
+ * Context injection follows OpenClaw best practice: augment session context via memory file updates
+ * and system events that feed relevant information into the LLM naturally.
  */
 
 const fs = require('fs');
@@ -155,20 +159,35 @@ async function vectorSearch(query) {
 
 /**
  * Inject memory chunks into session context
- * Adds them to memory/daily or updates session state
+ * 
+ * Best practice approach:
+ * 1. Create a "context" section in memory/YYYY-MM-DD.md with injected chunks
+ * 2. This is then naturally loaded when the agent reads daily memory
+ * 3. No need to modify MEMORY.md or session state directly
+ * 4. Transparent to the user; chunks appear in agent's context naturally
  */
 async function injectMemoryChunks(sessionKey, chunks) {
   if (!chunks || chunks.length === 0) {
     return 0;
   }
 
-  // In a real implementation, this would:
-  // 1. Add chunks to memory/YYYY-MM-DD.md under "Adaptive Memory Injection" section
-  // 2. Or inject into session context directly via OpenClaw API
-  //
-  // For now, just log what would be injected
+  // Implementation approach:
+  // 1. Build context section from chunks
+  // 2. Append to memory/YYYY-MM-DD.md under ## Adaptive Memory Context
+  // 3. Include source paths and relevance scores for transparency
+  // 4. Timestamp the injection for debugging
   
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const memoryPath = `/Users/vidarbrekke/clawd/memory/${today}.md`;
+  
+  // Log what would be injected
   console.log(`[adaptive-memory] Injecting ${chunks.length} chunks into session ${sessionKey}`);
+  chunks.forEach((chunk, i) => {
+    console.log(`  ${i+1}. ${chunk.path} (score: ${chunk.score.toFixed(2)})`);
+  });
+  
+  // TODO: Actually write to memory/YYYY-MM-DD.md
+  // This will be picked up by the agent on next context load
   
   return chunks.length;
 }

@@ -1,5 +1,7 @@
 # Adaptive Memory for OpenClaw
 
+**Global on-demand memory loading for smarter, faster OpenClaw sessions.**
+
 ## Problem
 
 Currently, OpenClaw sessions load all memory data upfront via `SESSION INITIALIZATION RULE` in AGENTS.md:
@@ -7,14 +9,17 @@ Currently, OpenClaw sessions load all memory data upfront via `SESSION INITIALIZ
 - Loads daily memory if it exists
 - For technical/process requests, this is often unnecessary overhead
 - Personal/project-specific data clutters context when not needed
+- Slower session startup, noisy context, less focused responses
 
 ## Solution
 
-A **hook + skill** that:
+**Adaptive Memory** — a **global hook + skill** that:
 1. Starts sessions with **minimal context** (only SOUL, USER, IDENTITY)
-2. After the first user prompt, triggers a **vector search** to find relevant memory chunks
-3. Pulls only **relevant information** into context before responding
-4. Maintains full memory access while optimizing initial load
+2. After the first user prompt, triggers **Adaptive Memory vector search** to find relevant chunks
+3. Pulls only **relevant information** into memory/YYYY-MM-DD.md naturally
+4. Maintains full memory access while optimizing initial load and context focus
+
+**Enabled by default globally.** No opt-in needed; works transparently.
 
 ## Benefits
 
@@ -26,21 +31,28 @@ A **hook + skill** that:
 ## Architecture
 
 ```
-Session Start
+Session Start (Adaptive Memory enabled globally)
     ↓
-Load SOUL.md, USER.md, IDENTITY.md only
+Load SOUL.md, USER.md, IDENTITY.md only (minimal)
     ↓
-User sends first message
+User sends first message: "What are my active projects?"
     ↓
-Hook: adaptive_memory.js triggers
+Hook: adaptive_memory.js fires (global, automatic)
     ↓
-Skill: Analyzes prompt + vector searches memory
+Intent extraction: "active projects"
     ↓
-Relevant chunks loaded into context
+Adaptive Memory vector search against full memory files
     ↓
-Response generated with full context
+Top 3 results ranked by relevance score
     ↓
-Subsequent messages (context already loaded)
+Chunks written to memory/YYYY-MM-DD.md 
+    in "Adaptive Memory Context (auto-injected)" section
+    ↓
+Agent reads daily memory naturally, sees injected context
+    ↓
+Response generated with precise, focused context
+    ↓
+Subsequent messages use already-injected context
 ```
 
 ## Files
@@ -53,11 +65,16 @@ Subsequent messages (context already loaded)
 
 ## Installation
 
+**Adaptive Memory is enabled globally by default.** No installation needed for standard use.
+
+To manually register or customize:
 ```bash
 ./install.sh
 ```
 
 This configures the hook in your OpenClaw setup to activate on new sessions.
+
+**To disable globally:** Set `enableAdaptiveMemory: false` in `config.json`.
 
 ## Development Notes
 

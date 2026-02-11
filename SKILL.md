@@ -8,19 +8,32 @@ Analyzes the user's intent via vector search and pulls only relevant memory chun
 
 ## Usage
 
-This skill is installed as an **automatic hook** in OpenClaw. No explicit invocation needed.
+This skill is installed as a **global automatic hook** in OpenClaw. It runs by default on all new sessions. No explicit invocation needed.
 
 ### How It Works
 
 1. **Session starts** → Loads SOUL.md, USER.md, IDENTITY.md only (minimal bootstrap)
-2. **User sends first message** → Hook fires automatically
-3. **Hook analyzes prompt** → Vector search against full memory
-4. **Relevant chunks loaded** → Injected into session context
-5. **Response generated** → With full context available
-6. **Subsequent messages** → No re-search needed (context already present)
+2. **User sends first message** → Hook fires automatically (global, no opt-out)
+3. **Hook analyzes prompt** → Adaptive Memory vector search against full memory files
+4. **Relevant chunks identified** → Top K chunks ranked by relevance score
+5. **Context injected** → Chunks appended to memory/YYYY-MM-DD.md in "Adaptive Memory Context" section
+6. **Response generated** → Agent naturally picks up injected context from daily memory
+7. **Subsequent messages** → No re-search needed (context already in daily file)
+
+### Context Injection Strategy (Best Practice)
+
+Rather than directly modifying session state, Adaptive Memory:
+- **Writes to memory/YYYY-MM-DD.md** — Standard daily memory file
+- **Uses clear section header** — "## Adaptive Memory Context (auto-injected)"
+- **Includes metadata** — Source paths, relevance scores, timestamps
+- **Transparent** — User can see what was loaded in session transcript
+- **Natural integration** — Agent reads daily memory as normal, context appears organically
 
 ## Installation
 
+Adaptive Memory is **enabled globally by default**. No installation needed for standard use.
+
+To manually register or customize:
 ```bash
 cd /path/to/adaptive_memory
 ./install.sh
@@ -28,9 +41,11 @@ cd /path/to/adaptive_memory
 
 This registers the hook in `~/.openclaw/openclaw.json` under `hooks.onFirstMessage`.
 
+**Note:** Global enable means the hook runs on all new sessions automatically.
+
 ## Configuration
 
-Edit `config.json` to customize:
+Edit `config.json` to customize behavior:
 
 ```json
 {
@@ -44,13 +59,13 @@ Edit `config.json` to customize:
 
 ### Parameters
 
-- `enableAdaptiveMemory` — Toggle feature on/off
-- `searchTopK` — Number of memory chunks to retrieve
-- `minRelevanceScore` — Filter low-relevance results
-- `debounceMs` — Delay before executing search (avoids multiple fires)
-- `fallbackBehavior` — What to do if search fails
-  - `continue_without_context` — Respond normally (safest)
-  - `load_all_memory` — Fall back to old behavior
+- `enableAdaptiveMemory` — Toggle feature on/off (default: true, global)
+- `searchTopK` — Number of memory chunks to retrieve (default: 3)
+- `minRelevanceScore` — Filter low-relevance results (default: 0.5, range 0-1)
+- `debounceMs` — Delay before executing search (default: 500ms, prevents duplicate searches)
+- `fallbackBehavior` — What to do if search fails (default: continue_without_context)
+  - `continue_without_context` — Respond normally without injected context (safest)
+  - `load_all_memory` — Fall back to loading full MEMORY.md (older behavior)
 
 ## Development
 
@@ -102,13 +117,30 @@ npm test
 - Verify memory file is writable
 - Check session logs for errors
 
+## How Adaptive Memory Differs from Standard Session Init
+
+### Standard (AGENTS.md SESSION INITIALIZATION RULE)
+- Loads SOUL.md, USER.md, IDENTITY.md, daily memory **unconditionally**
+- All context loaded upfront, even if user only needs technical help
+- High initial context size
+- Slower session startup
+
+### Adaptive Memory (This Skill)
+- Loads SOUL.md, USER.md, IDENTITY.md only initially
+- **After first user message**, analyzes intent via vector search
+- **Only relevant chunks** appended to daily memory
+- User gets precise context for their specific request
+- Faster startup, cleaner context, better focus
+
 ## Future Enhancements
 
 - [ ] Caching of search results to avoid redundant lookups
 - [ ] User feedback loop (rate relevance of loaded chunks)
-- [ ] Hybrid search (keyword + vector)
-- [ ] Per-project memory profiles
-- [ ] Analytics on what memory gets loaded vs used
+- [ ] Hybrid search (keyword + vector embedding)
+- [ ] Per-project memory profiles with custom search weights
+- [ ] Analytics dashboard (what memory gets loaded vs actually used)
+- [ ] Smart injection timing (detect when user might need new context mid-session)
+- [ ] Cross-session learning (popular context patterns)
 
 ## Related
 

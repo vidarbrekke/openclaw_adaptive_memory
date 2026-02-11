@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 
 /**
- * Memory Search Module
+ * Adaptive Memory Search Module
  * 
  * Performs vector search against OpenClaw memory files.
  * Ranks results by relevance and returns top K chunks.
+ * 
+ * This is the core search engine for the Adaptive Memory skill.
+ * Supports both vector-based and keyword-based search strategies.
  */
 
 const fs = require('fs');
 const path = require('path');
 
 /**
- * Search memory for relevant chunks
- * @param {string} query - User's intent/question
- * @param {object} options - Search options
- * @returns {Promise<Array>} Ranked results with scores
+ * Adaptive Memory search — find relevant memory chunks
+ * @param {string} query - User's intent/question (from first message)
+ * @param {object} options - Search options (maxResults, minScore, etc.)
+ * @returns {Promise<Array>} Ranked results with scores and paths
  */
 async function searchMemory(query, options = {}) {
   const {
@@ -79,11 +82,18 @@ async function getMemoryFiles(memoryDir) {
 }
 
 /**
- * Vector search (placeholder for real vector search)
- * In production, this would call OpenClaw's memory_search tool
+ * Adaptive Memory vector search
+ * 
+ * This is the primary search strategy. It would ideally use:
+ * - Real vector embeddings (OpenAI, Ollama, etc.)
+ * - Cosine similarity for ranking
+ * - Semantic understanding of query intent
+ * 
+ * Currently uses keyword-based placeholder; can be upgraded
+ * to real vector embeddings by replacing scoreChunk() implementation.
  */
 async function vectorSearchFiles(query, files, options) {
-  console.log(`[search] Vector searching ${files.length} files for: "${query.substring(0, 50)}..."`);
+  console.log(`[adaptive-memory] Vector searching ${files.length} files for: "${query.substring(0, 50)}..."`);
   
   const results = [];
   
@@ -94,7 +104,7 @@ async function vectorSearchFiles(query, files, options) {
       // Split into chunks (paragraphs or sections)
       const chunks = splitIntoChunks(content, filePath);
       
-      // Score each chunk against query (keyword similarity as placeholder)
+      // Score each chunk against query (using adaptive memory scoring)
       for (const chunk of chunks) {
         const score = scoreChunk(query, chunk.text);
         
@@ -108,7 +118,7 @@ async function vectorSearchFiles(query, files, options) {
         }
       }
     } catch (error) {
-      console.error(`[search] Error reading ${filePath}:`, error.message);
+      console.error(`[adaptive-memory] Error reading ${filePath}:`, error.message);
     }
   }
   
@@ -120,10 +130,13 @@ async function vectorSearchFiles(query, files, options) {
 }
 
 /**
- * Keyword search (fallback when vector search unavailable)
+ * Adaptive Memory keyword search (fallback when vector search unavailable)
+ * 
+ * Fast fallback strategy when vector embeddings aren't available.
+ * Uses keyword matching and TF-IDF-inspired scoring.
  */
 async function keywordSearchFiles(query, files, options) {
-  console.log(`[search] Keyword searching ${files.length} files for: "${query.substring(0, 50)}..."`);
+  console.log(`[adaptive-memory] Keyword searching ${files.length} files for: "${query.substring(0, 50)}..."`);
   
   const results = [];
   const keywords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
@@ -155,7 +168,7 @@ async function keywordSearchFiles(query, files, options) {
         }
       }
     } catch (error) {
-      console.error(`[search] Error reading ${filePath}:`, error.message);
+      console.error(`[adaptive-memory] Error reading ${filePath}:`, error.message);
     }
   }
   
