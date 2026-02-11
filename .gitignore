@@ -5,3 +5,5 @@ node_modules/
 *.backup.*
 .env
 .env.local
+adaptive-memory-cache.json
+*.tmp.*

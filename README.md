@@ -1,84 +1,36 @@
 # Adaptive Memory for OpenClaw
 
-**Global on-demand memory loading for smarter, faster OpenClaw sessions.**
+Global on-demand memory loading: minimal context at session start, then injects only relevant memory chunks after the first user message.
 
-## Problem
+## What it does
 
-Currently, OpenClaw sessions load all memory data upfront via `SESSION INITIALIZATION RULE` in AGENTS.md:
-- Loads SOUL.md, USER.md, IDENTITY.md unconditionally
-- Loads daily memory if it exists
-- For technical/process requests, this is often unnecessary overhead
-- Personal/project-specific data clutters context when not needed
-- Slower session startup, noisy context, less focused responses
-
-## Solution
-
-**Adaptive Memory** — a **global hook + skill** that:
-1. Starts sessions with **minimal context** (only SOUL, USER, IDENTITY)
-2. After the first user prompt, triggers **Adaptive Memory vector search** to find relevant chunks
-3. Pulls only **relevant information** into memory/YYYY-MM-DD.md naturally
-4. Maintains full memory access while optimizing initial load and context focus
-
-**Enabled by default globally.** No opt-in needed; works transparently.
-
-## Benefits
-
-- ✅ Faster session startup (no full memory load)
-- ✅ Cleaner context for off-topic requests
-- ✅ Still accesses deep context when needed
-- ✅ Works transparently — user doesn't notice the difference
-
-## Architecture
-
-```
-Session Start (Adaptive Memory enabled globally)
-    ↓
-Load SOUL.md, USER.md, IDENTITY.md only (minimal)
-    ↓
-User sends first message: "What are my active projects?"
-    ↓
-Hook: adaptive_memory.js fires (global, automatic)
-    ↓
-Intent extraction: "active projects"
-    ↓
-Adaptive Memory vector search against full memory files
-    ↓
-Top 3 results ranked by relevance score
-    ↓
-Chunks written to memory/YYYY-MM-DD.md 
-    in "Adaptive Memory Context (auto-injected)" section
-    ↓
-Agent reads daily memory naturally, sees injected context
-    ↓
-Response generated with precise, focused context
-    ↓
-Subsequent messages use already-injected context
-```
+- **Session start:** Loads SOUL.md, USER.md, IDENTITY.md only (no full memory).
+- **First user message:** Hook runs → intent extraction → keyword search over `memoryDir` → top K chunks injected into `memoryDir/YYYY-MM-DD.md`.
+- **Result:** Bounded, relevant context; full memory still available when needed.
 
 ## Files
 
-- `SKILL.md` — Skill documentation
-- `hook.js` — Triggers after first user prompt
-- `search.js` — Vector search implementation
-- `install.sh` — Setup script
-- `test.js` — Test suite
+| File        | Role |
+|------------|------|
+| `SKILL.md` | Skill description and config reference |
+| `hook.js`  | First-message hook; calls search, injects chunks |
+| `search.js`| Keyword search, mtime cache, markdown chunking |
+| `config.json` | Options (memoryDir, searchTopK, caps, etc.) |
+| `install.sh`  | Prints hook config for `~/.openclaw/openclaw.json` |
 
-## Installation
+**Install:** Run `./install.sh`, add the printed hook block to `~/.openclaw/openclaw.json`, restart OpenClaw. Disable with `enableAdaptiveMemory: false` in `config.json`.
 
-**Adaptive Memory is enabled globally by default.** No installation needed for standard use.
+**Distribution:** The publishable bundle is `dist/adaptive-memory/`. See that folder’s **INSTALL.md** for end-user install and ClawHub publish. Refresh runtime files with `./scripts/sync-dist.sh` after code changes.
 
-To manually register or customize:
+## Dist layout and publish
+
 ```bash
-./install.sh
+./scripts/sync-dist.sh   # copy hook.js, search.js, config.json, install.sh, LICENSE into dist
+cd dist/adaptive-memory
+# Bump version in SKILL.md and CHANGELOG.md, then:
+clawhub publish . --slug adaptive-memory --name "Adaptive Memory" --tags latest
 ```
 
-This configures the hook in your OpenClaw setup to activate on new sessions.
+## Development
 
-**To disable globally:** Set `enableAdaptiveMemory: false` in `config.json`.
-
-## Development Notes
-
-- Hook triggers on `first_user_message` event
-- Search uses existing OpenClaw embeddings
-- Loads chunks into session context via MEMORY.md or memory/daily file
-- Fallback: if search fails, session continues normally
+Tests: `npm test` and `npm run integration-test`. Hook uses `onFirstMessage`; search uses keyword scoring + `~/.openclaw/adaptive-memory-cache.json`; fallback on error is `continue_without_context`.

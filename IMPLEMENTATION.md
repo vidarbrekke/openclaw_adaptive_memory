@@ -1,6 +1,6 @@
 # Adaptive Memory: Implementation Guide
 
-**Status:** Production-ready POC | **Version:** 0.1.0
+**Version:** 0.2.0
 
 ---
 
@@ -68,147 +68,26 @@ Injected context available for response
 
 ## File Reference
 
-### `hook.js` (5.8 KB)
-**Purpose:** Hook handler that triggers after first user message
+### `hook.js`
+**Purpose:** First-message hook: intent → search → inject.
 
-**Key Functions:**
-- `onFirstMessage({ sessionKey, message, context })` — Main handler
-- `extractIntent(message)` — Parse user's intent
-- `vectorSearch(query)` — Search memory (calls search.js)
-- `injectMemoryChunks(sessionKey, chunks)` — Write to daily memory
-- `buildInjectionSection(chunks, timestamp)` — Format section for memory
+**Key flow:** `onFirstMessage` → debounce → `extractIntent` (strip code blocks, normalize) → `shouldSearchMemory` (skip tech-only prompts) → `searchMemory` → `injectMemoryChunks`. Injection: per-session de-dupe via HTML comment marker, bounded by `maxInjectedCharsTotal` / `maxSnippetCharsEach`, atomic write (temp + rename). Config: **config.json** (see SKILL.md).
 
-**Config Defaults:**
-- `enableAdaptiveMemory: true` — Global enable
-- `searchTopK: 3` — Load top 3 chunks
-- `minRelevanceScore: 0.5` — Filter threshold
-- `debounceMs: 500` — Prevent duplicate searches
-- `fallbackBehavior: 'continue_without_context'` — Safe fallback
+### `search.js`
+**Purpose:** Keyword search over memory files with mtime cache.
 
-**Output Example:**
-```
-[adaptive-memory] Searching for: "What are my active projects?"
-[adaptive-memory] Found 3 results for: "What are my active projects?"
-[adaptive-memory] Injecting 3 chunks into session test-123
-  1. projects.md (score: 0.92)
-  2. infrastructure.md (score: 0.78)
-  3. infrastructure.md (score: 0.65)
-[adaptive-memory] Injected 3 chunks into /Users/vidarbrekke/clawd/memory/2026-02-11.md
-```
+**Key behaviour:** `searchMemory(query, options)` → `getMemoryFiles(memoryDir)` → `vectorSearchFiles` (or keyword fallback). Cache at `~/.openclaw/adaptive-memory-cache.json` keyed by file path + mtime; only changed files re-chunked. Chunking: split on markdown headings then paragraphs, cap 1200 chars/chunk, 200 chunks/file. Scoring: extracted keywords (stop words filtered), regex-escaped word-boundary matches, coverage + repeat bonus, 0–1 normalized. Snippets keep original casing.
 
-### `search.js` (7.2 KB)
-**Purpose:** Vector search engine for memory files
+**Performance:** ~100–300ms typical; cold cache first run, then faster.
 
-**Key Functions:**
-- `searchMemory(query, options)` — Main search function
-- `vectorSearchFiles(query, files, options)` — Primary search strategy
-- `keywordSearchFiles(query, files, options)` — Fallback search
-- `getMemoryFiles(memoryDir)` — Recursively list memory files
-- `scoreChunk(query, chunkText)` — TF-IDF-inspired scoring
-
-**Scoring Algorithm:**
-- Extracts keywords from query (length > 2)
-- Counts occurrences in each chunk
-- Weights by occurrence frequency (logarithmic boost)
-- Normalizes to 0-1 range
-- Currently keyword-based; ready for real vector embeddings
-
-**Performance:**
-- ~100-300ms for typical memory size (10-50 files)
-- Scales linearly with file count
-- ~500ms for large memory (100+ files)
-
-### `config.json` (342 bytes)
-**Purpose:** Configuration file for Adaptive Memory behavior
-
-```json
-{
-  "enableAdaptiveMemory": true,           // Global enable
-  "searchTopK": 3,                        // Chunks to inject
-  "minRelevanceScore": 0.5,               // Score threshold (0-1)
-  "debounceMs": 500,                      // Delay to prevent duplicates
-  "fallbackBehavior": "continue_without_context",  // Or "load_all_memory"
-  "memoryDir": "~/clawd/memory",          // Memory location
-  "useVectorSearch": true,                // Primary strategy
-  "maxResultsPerSearch": 10,              // Search limit
-  "enableLogging": true,                  // Debug output
-  "logLevel": "info"                      // Log verbosity
-}
-```
-
-### Memory File Injection Format
-
-When chunks are injected into `memory/YYYY-MM-DD.md`:
-
-```markdown
-## Adaptive Memory Context (auto-injected)
-*Loaded at 2026-02-11T16:58:32.123Z by Adaptive Memory hook*
-
-These chunks were automatically loaded based on your first message:
-
-### 1. projects.md (relevance: 92%)
-
-## Active Projects (2026)
-
-### Photonest
-- Firebase-hosted Node.js web app
-- Status: Pre-monetization, feature development
-
-### 2. infrastructure.md (relevance: 78%)
-
-## GitHub Repos
-- photonest: Firebase + Node.js
-- tunetussle: Multiplayer game
-- mk-theme: WordPress/WooCommerce
-- wpchat: RAG ecommerce chatbot
-
----
-```
+### `config.json`
+See repo root `config.json` and **SKILL.md** for options. Main: `memoryDir`, `searchTopK`, `minRelevanceScore`, `maxInjectedCharsTotal`, `maxSnippetCharsEach`, `debounceMs`, `fallbackBehavior`.
 
 ---
 
-## Installation & Setup
+## Installation
 
-### Option 1: Automatic Hook Registration (Recommended)
-
-```bash
-cd /Users/vidarbrekke/Dev/adaptive_memory
-./install.sh
-```
-
-Then edit `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "hooks": {
-    "onFirstMessage": {
-      "name": "adaptive_memory",
-      "path": "/Users/vidarbrekke/Dev/adaptive_memory/hook.js",
-      "enabled": true
-    }
-  }
-}
-```
-
-Restart OpenClaw:
-```bash
-openclaw gateway restart
-```
-
-### Option 2: Manual Setup
-
-1. Copy project to your OpenClaw skills directory
-2. Add hook entry to `~/.openclaw/openclaw.json`
-3. Restart gateway
-
-### Option 3: Disable Globally
-
-Set in `config.json`:
-```json
-{
-  "enableAdaptiveMemory": false
-}
-```
+Run `./install.sh`, add printed hook to `~/.openclaw/openclaw.json`, restart OpenClaw. ClawHub install/publish: **dist/adaptive-memory/INSTALL.md**. Disable: `enableAdaptiveMemory: false` in `config.json`.
 
 ---
 
@@ -293,7 +172,7 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
 **Check:**
 1. Are memory files readable?
    ```bash
-   ls -la ~/clawd/memory/
+   ls -la ~/.openclaw/memory/
    ```
 2. Is memoryDir path correct in config.json?
 3. Are keywords at least 3 chars?
@@ -314,7 +193,7 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
 **Check:**
 1. Is memory file being updated?
    ```bash
-   tail -50 ~/clawd/memory/2026-02-11.md
+   tail -50 ~/.openclaw/memory/2026-02-11.md
    ```
 2. Look for "Adaptive Memory Context" section
 3. Is daily memory being loaded by agent?
@@ -333,7 +212,7 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
 **Check:**
 1. How many memory files? (Large corpus = slower search)
    ```bash
-   find ~/clawd/memory -name "*.md" | wc -l
+   find ~/.openclaw/memory -name "*.md" | wc -l
    ```
 2. Is search taking too long?
    ```bash
@@ -353,7 +232,7 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
 **Check:**
 1. Is config.json in project root?
    ```bash
-   ls -la /Users/vidarbrekke/Dev/adaptive_memory/config.json
+   ls -la ./config.json
    ```
 2. Is JSON syntax valid?
    ```bash
@@ -384,73 +263,7 @@ With 100+ files: add ~200-400ms
 
 ---
 
-## Future Roadmap
-
-### Phase 2: Real Vector Embeddings
-- Integration with Ollama or OpenAI embeddings
-- Replace TF-IDF with cosine similarity
-- Better semantic understanding
-
-### Phase 3: Advanced Features
-- Caching of search results
-- User feedback loop (rate relevance)
-- Hybrid search (keyword + vector)
-- Per-project memory profiles
-- Analytics on context usage
-
-### Phase 4: Optimization
-- Incremental indexing
-- Embedding caching
-- Parallel search
-- Memory compression
-
----
-
 ## Development
 
-### Project Structure
-```
-/Users/vidarbrekke/Dev/adaptive_memory/
-├── hook.js              # Main hook handler
-├── search.js            # Search engine
-├── config.json          # Configuration
-├── test.js              # Unit tests
-├── integration-test.js  # Full integration tests
-├── install.sh           # Installation script
-├── package.json         # NPM metadata
-├── SKILL.md             # OpenClaw skill docs
-├── README.md            # User guide
-├── IMPLEMENTATION.md    # This file
-└── .git/                # Git repository
-```
-
-### Adding Real Vector Search
-
-1. Update `scoreChunk()` in search.js:
-   ```javascript
-   async function scoreChunk(query, chunkText, embeddingModel) {
-     const queryEmbedding = await embeddingModel.embed(query);
-     const chunkEmbedding = await embeddingModel.embed(chunkText);
-     return cosineSimilarity(queryEmbedding, chunkEmbedding);
-   }
-   ```
-
-2. Pass embedding model to vectorSearchFiles()
-3. Update config.json with embedding model selection
-4. Test with integration-test.js
-
----
-
-## License
-
-MIT
-
----
-
-## Support
-
-Issues or questions? Check:
-- `/Users/vidarbrekke/clawd/memory/2026-02-11-adaptive-memory.md` — Project notes
-- OpenClaw docs: `/Users/vidarbrekke/clawd/docs/`
-- GitHub issues: (when published)
+Repo layout: **README.md**. Tests: `npm test`, `npm run integration-test`. Dist bundle: `dist/adaptive-memory/`, sync with `./scripts/sync-dist.sh`.
 
