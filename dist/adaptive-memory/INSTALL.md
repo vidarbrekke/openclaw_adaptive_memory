@@ -19,33 +19,29 @@ clawhub login
 clawhub install adaptive-memory
 ```
 
-Then register the hook (this skill uses an OpenClaw **hook**, not only the skill loader):
+Then register the hook (this skill uses an OpenClaw **hook**). From the installed folder run `./install.sh` — it updates `~/.openclaw/openclaw.json` automatically — then restart OpenClaw: `openclaw gateway restart`.
 
-1. Locate the installed folder (e.g. `<workspace>/skills/adaptive-memory` or `~/.openclaw/skills/adaptive-memory`).
-2. Run from that folder:
-   ```bash
-   ./install.sh
-   ```
-3. Copy the printed JSON into `~/.openclaw/openclaw.json` under `hooks.onFirstMessage` (use the path the script prints).
-4. Restart OpenClaw: `openclaw gateway restart`.
+### Option B: Manual install (copy of this folder)
 
-### Option B: Manual install (copy this folder)
+One command: run the installer from this folder. It copies the bundle to `~/.openclaw/skills/adaptive-memory` and registers the hook.
 
-1. Copy this entire folder to your OpenClaw skills directory, for example:
-   - `<workspace>/skills/adaptive-memory`, or
-   - `~/.openclaw/skills/adaptive-memory`
-2. From the copied folder, run:
-   ```bash
-   chmod +x hook.js search.js install.sh
-   ./install.sh
-   ```
-3. Add the hook block printed by `install.sh` to `~/.openclaw/openclaw.json` (ensure the `path` points to the **actual** path of `hook.js`).
-4. Restart OpenClaw.
+```bash
+./install.sh
+```
+
+(If needed: `chmod +x install.sh` then run it.) Then restart OpenClaw: `openclaw gateway restart`.
+
+So with a copy of the dist directory, the full flow is: `./install.sh` → restart OpenClaw.
 
 ### After install
 
-- Memory files are read from `memoryDir` (default `~/.openclaw/memory`). Create that directory and add `.md` or `.json` memory files if needed.
-- Injected context is written to `memoryDir/YYYY-MM-DD.md`. The hook runs on the first user message of each session.
+- Memory files are read from `memoryDir`. Default is `~/.openclaw/memory` unless you use a project layout (e.g. `clawd` with `memory/` in the project). Then set **before starting the gateway**: `OPENCLAW_PROJECT_DIR=/path/to/project` (memory at `project/memory/`) or `OPENCLAW_MEMORY_DIR=/path/to/memory`. Create the directory and add `.md` memory files if needed.
+- Hook lifecycle maintenance also runs on gateway startup and session new/reset:
+  - startup: pre-warm cache + refresh `session-digest.md`
+  - new/reset: compact stale adaptive-memory sections in today's file
+- Injected context is written to `memoryDir/YYYY-MM-DD.md`. Retrieval runs on first user message per session.
+- First-message dedupe is tracked with per-session marker files in `~/.openclaw/adaptive-memory-first-message-sessions/` for parallel-session safety.
+- If core memory files are detected as bloated, a one-time consent prompt is added; optimization only runs after explicit user approval and archives full snapshots before compaction.
 
 ---
 
@@ -68,10 +64,16 @@ From the **skill folder** (this `adaptive-memory` directory):
 clawhub publish . --slug adaptive-memory --name "Adaptive Memory" --tags latest
 ```
 
+Before publishing, run verification:
+
+```bash
+./verify.sh
+```
+
 Or with explicit version and changelog:
 
 ```bash
-clawhub publish . --slug adaptive-memory --name "Adaptive Memory" --version 0.2.0 --changelog "Per-session de-dupe, mtime cache, bounded injection" --tags latest
+clawhub publish . --slug adaptive-memory --name "Adaptive Memory" --version 0.3.0 --changelog "Lifecycle maintenance, startup digest, consent-gated lossless optimization" --tags latest
 ```
 
 - `--slug` — Registry identifier (defaults to folder name).

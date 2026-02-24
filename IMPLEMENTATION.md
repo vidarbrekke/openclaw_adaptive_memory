@@ -1,16 +1,16 @@
 # Adaptive Memory: Implementation Guide
 
-**Version:** 0.2.0
+**Version:** 0.3.0
 
 ---
 
 ## Overview
 
 Adaptive Memory is an OpenClaw hook + skill that:
-1. Starts sessions with minimal context (SOUL, USER, IDENTITY only)
-2. After first user message, triggers vector search
-3. Injects relevant memory chunks into daily memory file
-4. Agent naturally picks up injected context
+1. Pre-warms search cache on gateway startup
+2. Compacts stale adaptive-memory blocks in today's daily file on session new/reset
+3. Refreshes a cross-session digest (`memory/session-digest.md`)
+4. After first user message, triggers cached keyword search and injects relevant chunks
 
 **Global by default** — no opt-in required, works transparently.
 
@@ -21,18 +21,19 @@ Adaptive Memory is an OpenClaw hook + skill that:
 ### Components
 
 ```
-┌─ hook.js ─────────────┐
-│ - Listens for 1st msg │
-│ - Extracts intent     │
-│ - Calls search        │
-│ - Injects to memory   │
+┌─ hook.js ──────────────────────┐
+│ - Startup/new/reset maintenance│
+│ - Session digest generation    │
+│ - First-message intent flow    │
+│ - Injects to daily memory      │
 └───────────────────────┘
           ↓
-┌─ search.js ───────────┐
-│ - Vector search       │
-│ - Keyword fallback    │
-│ - Scoring & ranking   │
-│ - Returns top K       │
+┌─ search.js ────────────────┐
+│ - Cache warmup on startup  │
+│ - Cached keyword search    │
+│ - mtime cache + scoring    │
+│ - Scoring & ranking        │
+│ - Returns top K            │
 └───────────────────────┘
           ↓
 ┌─ memory/YYYY-MM-DD.md┐
@@ -45,9 +46,13 @@ Adaptive Memory is an OpenClaw hook + skill that:
 ### Data Flow
 
 ```
-Session starts
+Gateway starts
     ↓
-Load SOUL.md, USER.md, IDENTITY.md (minimal)
+Warm cache + refresh session-digest.md
+    ↓
+Session new/reset
+    ↓
+Compact stale adaptive-memory sections in today's file
     ↓
 User sends: "What are my projects?"
     ↓
@@ -69,25 +74,25 @@ Injected context available for response
 ## File Reference
 
 ### `hook.js`
-**Purpose:** First-message hook: intent → search → inject.
+**Purpose:** Lifecycle maintenance + first-message hook.
 
-**Key flow:** `onFirstMessage` → debounce → `extractIntent` (strip code blocks, normalize) → `shouldSearchMemory` (skip tech-only prompts) → `searchMemory` → `injectMemoryChunks`. Injection: per-session de-dupe via HTML comment marker, bounded by `maxInjectedCharsTotal` / `maxSnippetCharsEach`, atomic write (temp + rename). Config: **config.json** (see SKILL.md).
+**Key flow:** `gateway:startup` → `prewarmAdaptiveCache` + `refreshSessionDigest`; `command:new/reset` → `compactDailyMemoryForStartup` + digest refresh; regular command path → `onFirstMessage` → `extractIntent` (strip code blocks, normalize) → `shouldSearchMemory` (skip tech-only prompts unless personal/project cues) → `searchMemory` → `injectMemoryChunks`. Injection is bounded by `maxInjectedCharsTotal` / `maxSnippetCharsEach`, atomic write (temp + rename), and structurally bounded by explicit end markers (`<!-- ...:end -->`) for robust cleanup.
 
 ### `search.js`
-**Purpose:** Keyword search over memory files with mtime cache.
+**Purpose:** Keyword search over memory files with mtime cache + startup warmup.
 
-**Key behaviour:** `searchMemory(query, options)` → `getMemoryFiles(memoryDir)` → `vectorSearchFiles` (or keyword fallback). Cache at `~/.openclaw/adaptive-memory-cache.json` keyed by file path + mtime; only changed files re-chunked. Chunking: split on markdown headings then paragraphs, cap 1200 chars/chunk, 200 chunks/file. Scoring: extracted keywords (stop words filtered), regex-escaped word-boundary matches, coverage + repeat bonus, 0–1 normalized. Snippets keep original casing.
+**Key behaviour:** `warmSearchCache(options)` pre-computes and persists chunks by mtime. `searchMemory(query, options)` → `getMemoryFiles(memoryDir)` → `vectorSearchFiles` (single cached path). Cache at `~/.openclaw/adaptive-memory-cache.json` keyed by file path + mtime; only changed files re-chunked. Chunking: split on markdown headings then paragraphs, cap 1200 chars/chunk, 200 chunks/file. Scoring: extracted keywords (stop words filtered), per-query precompiled matchers (built once, reused per chunk), punctuation-aware boundaries, coverage + repeat bonus, 0–1 normalized. Snippets keep original casing.
 
 **Performance:** ~100–300ms typical; cold cache first run, then faster.
 
 ### `config.json`
-See repo root `config.json` and **SKILL.md** for options. Main: `memoryDir`, `searchTopK`, `minRelevanceScore`, `maxInjectedCharsTotal`, `maxSnippetCharsEach`, `debounceMs`, `fallbackBehavior`.
+See repo root `config.json` and **SKILL.md** for options. Main: `memoryDir`, `searchTopK`, `minRelevanceScore`, `maxInjectedCharsTotal`, `maxSnippetCharsEach`, `fallbackBehavior`, `enableLogging`, `logLevel`.
 
 ---
 
 ## Installation
 
-Run `./install.sh`, add printed hook to `~/.openclaw/openclaw.json`, restart OpenClaw. ClawHub install/publish: **dist/adaptive-memory/INSTALL.md**. Disable: `enableAdaptiveMemory: false` in `config.json`.
+Run `./install.sh`, then restart OpenClaw. ClawHub install/publish: **dist/adaptive-memory/INSTALL.md**. Disable: `enableAdaptiveMemory: false` in `config.json`.
 
 ---
 
@@ -149,11 +154,11 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
 **Symptom:** Context never injected into daily memory
 
 **Check:**
-1. Is hook registered in `~/.openclaw/openclaw.json`?
+1. Is hook installed/enabled in `~/.openclaw/openclaw.json` under `hooks.internal.entries` and `hooks.internal.installs`?
    ```bash
    cat ~/.openclaw/openclaw.json | grep adaptive_memory
    ```
-2. Did you restart OpenClaw after adding hook?
+2. Did you restart the running gateway process after installing/updating hook?
    ```bash
    openclaw gateway restart
    ```
@@ -183,7 +188,7 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
 
 **Fix:**
 - Lower `minRelevanceScore` in config.json (try 0.3)
-- Check file format (should be .md or .json)
+- Check file format (should be .md)
 - Verify memory files have content related to query
 
 ### Context Not Appearing in Session
@@ -196,9 +201,9 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
    tail -50 ~/.openclaw/memory/2026-02-11.md
    ```
 2. Look for "Adaptive Memory Context" section
-3. Is daily memory being loaded by agent?
+3. Is daily memory being loaded by agent at startup?
    - Check AGENTS.md SESSION INITIALIZATION RULE
-   - Verify daily memory is in agent's context window
+   - Verify the active `memoryDir` matches your OpenClaw workspace setup
 
 **Fix:**
 - Check daily memory file has valid Markdown syntax
@@ -220,10 +225,28 @@ tail -f ~/.openclaw/logs/sessions.log | grep adaptive-memory
    ```
 
 **Fix:**
-- Archive old memory (move to separate directory)
+- Archive old memory (move to separate directory) or rely on consent-gated optimizer
 - Reduce `maxResultsPerSearch` in config.json
 - Increase `minRelevanceScore` to filter earlier
-- Consider implementing real vector embeddings (future phase)
+- Consider improving keyword ranking signals if corpus size grows
+
+### Consent-Gated Memory Optimization
+
+**Behavior:**
+- On startup/new/reset, hook checks daily + core memory file sizes.
+- If thresholds are exceeded, it appends a one-time maintenance prompt to daily memory.
+- No compaction occurs until explicit user consent is detected.
+- On approval, full snapshots are archived to `memory/archive/` before compaction.
+
+**Check:**
+1. Maintenance state file exists:
+   ```bash
+   ls -la ~/.openclaw/adaptive-memory-maintenance-state.json
+   ```
+2. Archive files are created after consent:
+   ```bash
+   ls -la ~/.openclaw/memory/archive/
+   ```
 
 ### Config Not Being Picked Up
 
@@ -265,5 +288,5 @@ With 100+ files: add ~200-400ms
 
 ## Development
 
-Repo layout: **README.md**. Tests: `npm test`, `npm run integration-test`. Dist bundle: `dist/adaptive-memory/`, sync with `./scripts/sync-dist.sh`.
+Repo layout: **README.md**. Tests: `npm test`, `npm run maintenance-test`, `npm run integration-test`. Dist bundle: `dist/adaptive-memory/`, sync with `./scripts/sync-dist.sh`.
 

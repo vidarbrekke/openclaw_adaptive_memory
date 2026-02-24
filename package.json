@@ -1,10 +1,16 @@
 {
   "name": "adaptive-memory",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "On-demand memory loading for OpenClaw sessions",
   "main": "hook.js",
+  "openclaw": {
+    "hooks": [
+      "./hooks/adaptive-memory"
+    ]
+  },
   "scripts": {
     "test": "node test.js",
+    "maintenance-test": "node maintenance-flow-test.js",
     "integration-test": "node integration-test.js",
     "search": "node search.js",
     "hook": "node hook.js",

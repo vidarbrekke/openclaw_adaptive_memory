@@ -23,13 +23,12 @@ Adaptive memory maintenance + on-demand memory loading for OpenClaw. It keeps da
 
 **Install:** Run `./install.sh`, then restart OpenClaw. Disable with `enableAdaptiveMemory: false` in `config.json`.
 
-**Distribution:** The publishable bundle is `dist/adaptive-memory/`. See that folder’s **INSTALL.md** for end-user install and ClawHub publish. Refresh runtime files with `./scripts/sync-dist.sh` after code changes.
+**Distribution:** This folder is the publishable bundle. See **INSTALL.md** for end-user install and ClawHub publish.
 
-## Dist layout and publish
+## Publish
 
 ```bash
-./scripts/sync-dist.sh   # copy hook.js, search.js, utils.js, config.json, install.sh, LICENSE into dist
-cd dist/adaptive-memory
+cd /path/to/adaptive-memory-dist/adaptive-memory
 # Bump version in SKILL.md and CHANGELOG.md, then:
 clawhub publish . --slug adaptive-memory --name "Adaptive Memory" --tags latest
 ```

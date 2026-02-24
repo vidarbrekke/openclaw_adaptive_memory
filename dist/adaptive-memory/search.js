@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Adaptive Memory Search Module (v0.2 — hardened)
+ * Adaptive Memory Search Module (v0.3)
  *
  * Performs keyword search against OpenClaw memory files.
  * - mtime-based persistent cache (re-chunks only changed files)
@@ -9,13 +9,14 @@
  * - Escaped regex scoring (safe for special chars like C++, what?, etc.)
  * - Preserves original text casing (lowercased copy used only for matching)
  *
- * Supports both vector-based and keyword-based search strategies.
+ * Uses cached keyword scoring (single search path).
  */
 
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
+const { expandPath, resolveMemoryDir } = require('./utils');
 
 // ---------------------------------------------------------------------------
 // Cache
@@ -54,22 +55,14 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Expand ~ to home directory (cross-platform)
- */
-function expandPath(filePath) {
-  if (filePath && filePath.startsWith('~')) {
-    return path.join(os.homedir(), filePath.slice(1));
-  }
-  return filePath;
-}
-
 // ---------------------------------------------------------------------------
 // Markdown-aware chunking
 // ---------------------------------------------------------------------------
 
 const MAX_CHUNK_LEN = 1200;
 const MAX_CHUNKS_PER_FILE = 200;
+const MAX_CACHE_FILES = 500;
+const MAX_CACHE_JSON_BYTES = 10 * 1024 * 1024;
 
 /**
  * Split markdown content into chunks respecting heading boundaries.
@@ -128,20 +121,37 @@ function extractKeywords(query) {
     .filter(w => w.length > 2 && !STOP_WORDS.has(w));
 }
 
+function buildKeywordMatchers(keywords) {
+  return keywords.map((word) => {
+    const escaped = escapeRegex(word);
+    const hasNonWord = /[^A-Za-z0-9_]/.test(word);
+    const pattern = hasNonWord
+      ? `(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`
+      : `\\b${escaped}\\b`;
+    return { word, re: new RegExp(pattern, 'g') };
+  });
+}
+
 /**
  * Score a chunk against extracted keywords.
  * Uses escaped regex with word boundaries for safe matching.
  * Returns 0..1 relevance score.
+ *
+ * Coverage rule: when the query has >=4 keywords, at least 2 distinct
+ * keywords must match — prevents a single strong keyword from passing.
  */
-function scoreChunk(keywords, chunkLower) {
-  if (!keywords.length) return 0;
+function scoreChunk(matchers, chunkLower) {
+  if (!matchers.length) return 0;
+  const compiled = typeof matchers[0] === 'string'
+    ? buildKeywordMatchers(matchers)
+    : matchers;
+  if (!compiled.length) return 0;
 
   let hits = 0;
   let bonus = 0;
 
-  for (const word of keywords) {
-    const re = new RegExp(`\\b${escapeRegex(word)}\\b`, 'g');
-    const matches = chunkLower.match(re);
+  for (const m of compiled) {
+    const matches = chunkLower.match(m.re);
     if (matches && matches.length) {
       hits += 1;
       // Logarithmic bonus for repeated mentions (capped)
@@ -149,8 +159,11 @@ function scoreChunk(keywords, chunkLower) {
     }
   }
 
-  const coverage = hits / keywords.length;       // 0..1 — how many keywords matched
-  const repeatBonus = bonus / keywords.length;    // small additional weight
+  // Coverage gate: require >=2 distinct keyword hits for longer queries
+  if (compiled.length >= 4 && hits < 2) return 0;
+
+  const coverage = hits / compiled.length;       // 0..1 — how many keywords matched
+  const repeatBonus = bonus / compiled.length;    // small additional weight
   return Math.min(coverage * 0.85 + repeatBonus * 0.3, 1.0);
 }
 
@@ -159,8 +172,14 @@ function scoreChunk(keywords, chunkLower) {
 // ---------------------------------------------------------------------------
 
 /**
- * Get all memory files (*.md, *.json) recursively from memoryDir.
- * Skips hidden directories.
+ * Pattern matching daily injection files (YYYY-MM-DD.md) written by the hook.
+ * These are excluded from the search corpus to prevent feedback loops.
+ */
+const DAILY_INJECTION_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
+
+/**
+ * Get memory files (*.md only) recursively from memoryDir.
+ * Skips hidden directories and daily injection files (YYYY-MM-DD.md).
  */
 async function getMemoryFiles(memoryDir) {
   const dir = expandPath(memoryDir);
@@ -173,11 +192,15 @@ async function getMemoryFiles(memoryDir) {
       const fullPath = path.join(dir, item.name);
 
       if (item.isDirectory()) {
-        if (!item.name.startsWith('.')) {
+        if (!item.name.startsWith('.') && item.name !== 'archive') {
           const sub = await getMemoryFiles(fullPath);
           files.push(...sub);
         }
-      } else if (item.isFile() && (item.name.endsWith('.md') || item.name.endsWith('.json'))) {
+      } else if (
+        item.isFile() &&
+        item.name.endsWith('.md') &&
+        !DAILY_INJECTION_RE.test(item.name)
+      ) {
         files.push(fullPath);
       }
     }
@@ -203,9 +226,14 @@ async function vectorSearchFiles(query, files, options = {}) {
 
   const cache = await loadCache(cachePath);
   const keywords = extractKeywords(query);
+  const matchers = buildKeywordMatchers(keywords);
   const results = [];
+  let dirty = false;
 
-  if (keywords.length === 0) return results;
+  if (matchers.length === 0) return results;
+
+  // Build set of current file paths for pruning
+  const currentPaths = new Set(files);
 
   for (const filePath of files) {
     try {
@@ -220,13 +248,14 @@ async function vectorSearchFiles(query, files, options = {}) {
 
         cached = {
           mtimeMs: st.mtimeMs,
-          chunks: chunkTexts.map(t => ({ text: t, lc: t.toLowerCase() })),
+          chunks: chunkTexts.map(t => ({ text: t })),
         };
         cache.files[key] = cached;
+        dirty = true;
       }
 
       for (const ch of cached.chunks) {
-        const score = scoreChunk(keywords, ch.lc);
+        const score = scoreChunk(matchers, String(ch.text || '').toLowerCase());
         if (score >= minScore) {
           results.push({
             path: filePath,
@@ -240,44 +269,126 @@ async function vectorSearchFiles(query, files, options = {}) {
     }
   }
 
-  await saveCache(cache, cachePath);
+  // Prune cache entries for deleted/renamed files
+  for (const key of Object.keys(cache.files)) {
+    if (!currentPaths.has(key)) {
+      delete cache.files[key];
+      dirty = true;
+    }
+  }
+
+  // Bound cache growth: keep most-recently-updated file entries.
+  const keys = Object.keys(cache.files);
+  if (keys.length > MAX_CACHE_FILES) {
+    keys
+      .sort((a, b) => (cache.files[b]?.mtimeMs || 0) - (cache.files[a]?.mtimeMs || 0))
+      .slice(MAX_CACHE_FILES)
+      .forEach((k) => {
+        delete cache.files[k];
+        dirty = true;
+      });
+  }
+
+  if (dirty) {
+    const approxBytes = Buffer.byteLength(JSON.stringify(cache), 'utf8');
+    if (approxBytes > MAX_CACHE_JSON_BYTES) {
+      const ordered = Object.keys(cache.files)
+        .sort((a, b) => (cache.files[b]?.mtimeMs || 0) - (cache.files[a]?.mtimeMs || 0));
+      while (ordered.length && Buffer.byteLength(JSON.stringify(cache), 'utf8') > MAX_CACHE_JSON_BYTES) {
+        const drop = ordered.pop();
+        if (!drop) break;
+        delete cache.files[drop];
+      }
+    }
+  }
+
+  // Only write cache if something changed
+  if (dirty) {
+    await saveCache(cache, cachePath);
+  }
 
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, maxResults);
 }
 
 /**
- * Fallback keyword search (no cache, simpler scoring).
+ * Pre-warm the mtime/chunk cache without running any query scoring.
+ * Useful on gateway startup to reduce first-search latency.
+ *
+ * @param {object} options - { memoryDir, cachePath }
+ * @returns {Promise<object>} Stats for observability
  */
-async function keywordSearchFiles(query, files, options = {}) {
-  const { maxResults = 10, minScore = 0.5 } = options;
-  const keywords = extractKeywords(query);
-  const results = [];
+async function warmSearchCache(options = {}) {
+  const { memoryDir = resolveMemoryDir(), cachePath } = options;
+  const files = await getMemoryFiles(memoryDir);
+  const cache = await loadCache(cachePath);
+  let dirty = false;
+  let refreshed = 0;
+  let reused = 0;
 
-  if (keywords.length === 0) return results;
+  const currentPaths = new Set(files);
 
   for (const filePath of files) {
     try {
-      const content = await fsp.readFile(filePath, 'utf8');
-      const chunks = splitIntoChunks(content);
+      const st = await fsp.stat(filePath);
+      const key = filePath;
+      let cached = cache.files[key];
 
-      for (const chunk of chunks) {
-        const score = scoreChunk(keywords, chunk.toLowerCase());
-        if (score >= minScore) {
-          results.push({
-            path: filePath,
-            score,
-            snippet: chunk.slice(0, 500),
-          });
-        }
+      if (!cached || cached.mtimeMs !== st.mtimeMs) {
+        const content = await fsp.readFile(filePath, 'utf8');
+        const chunkTexts = splitIntoChunks(content);
+        cache.files[key] = {
+          mtimeMs: st.mtimeMs,
+          chunks: chunkTexts.map(t => ({ text: t })),
+        };
+        dirty = true;
+        refreshed += 1;
+      } else {
+        reused += 1;
       }
     } catch {
-      // Ignore unreadable files
+      // Ignore unreadable files during warmup.
     }
   }
 
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, maxResults);
+  for (const key of Object.keys(cache.files)) {
+    if (!currentPaths.has(key)) {
+      delete cache.files[key];
+      dirty = true;
+    }
+  }
+
+  const keys = Object.keys(cache.files);
+  if (keys.length > MAX_CACHE_FILES) {
+    keys
+      .sort((a, b) => (cache.files[b]?.mtimeMs || 0) - (cache.files[a]?.mtimeMs || 0))
+      .slice(MAX_CACHE_FILES)
+      .forEach((k) => {
+        delete cache.files[k];
+        dirty = true;
+      });
+  }
+  if (dirty && Buffer.byteLength(JSON.stringify(cache), 'utf8') > MAX_CACHE_JSON_BYTES) {
+    const ordered = Object.keys(cache.files)
+      .sort((a, b) => (cache.files[b]?.mtimeMs || 0) - (cache.files[a]?.mtimeMs || 0));
+    while (ordered.length && Buffer.byteLength(JSON.stringify(cache), 'utf8') > MAX_CACHE_JSON_BYTES) {
+      const drop = ordered.pop();
+      if (!drop) break;
+      delete cache.files[drop];
+      dirty = true;
+    }
+  }
+
+  if (dirty) {
+    await saveCache(cache, cachePath);
+  }
+
+  return {
+    filesSeen: files.length,
+    refreshed,
+    reused,
+    cacheWritten: dirty,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -288,15 +399,14 @@ async function keywordSearchFiles(query, files, options = {}) {
  * Adaptive Memory search — find relevant memory chunks.
  *
  * @param {string} query - User's intent/question
- * @param {object} options - { maxResults, minScore, memoryDir, useVectorSearch, cachePath }
+ * @param {object} options - { maxResults, minScore, memoryDir, cachePath }
  * @returns {Promise<Array>} Ranked results with { path, score, snippet }
  */
 async function searchMemory(query, options = {}) {
   const {
     maxResults = 10,
     minScore = 0.5,
-    memoryDir = process.env.OPENCLAW_MEMORY_DIR || '~/.openclaw/memory',
-    useVectorSearch = true,
+    memoryDir = resolveMemoryDir(),
     cachePath,
   } = options;
 
@@ -307,8 +417,7 @@ async function searchMemory(query, options = {}) {
   const files = await getMemoryFiles(memoryDir);
   if (files.length === 0) return [];
 
-  const searchFn = useVectorSearch ? vectorSearchFiles : keywordSearchFiles;
-  return searchFn(query, files, { maxResults, minScore, cachePath });
+  return vectorSearchFiles(query, files, { maxResults, minScore, cachePath });
 }
 
 // ---------------------------------------------------------------------------
@@ -333,17 +442,20 @@ if (require.main === module) {
 
 module.exports = {
   searchMemory,
+  warmSearchCache,
   getMemoryFiles,
   vectorSearchFiles,
-  keywordSearchFiles,
   // Exported for unit testing
   _internals: {
     escapeRegex,
     extractKeywords,
+    buildKeywordMatchers,
     scoreChunk,
     splitIntoChunks,
     expandPath,
+    resolveMemoryDir,
     loadCache,
     saveCache,
+    DAILY_INJECTION_RE,
   },
 };

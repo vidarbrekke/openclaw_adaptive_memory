@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Unit Test Suite for Adaptive Memory (v0.2 — hardened)
+ * Unit Test Suite for Adaptive Memory (v0.3)
  *
  * Tests:
  *  - Intent extraction (code block stripping, whitespace normalization)
@@ -25,15 +25,18 @@ const TEST_OUTPUT_DIR = path.join(os.tmpdir(), `adaptive-memory-unit-${Date.now(
 process.env.OPENCLAW_MEMORY_DIR = TEST_OUTPUT_DIR;
 
 const hook = require('./hook.js');
-const { searchMemory, _internals: searchInternals } = require('./search.js');
+const { searchMemory, getMemoryFiles, _internals: searchInternals } = require('./search.js');
 const {
   escapeRegex,
   extractKeywords,
+  buildKeywordMatchers,
   scoreChunk,
   splitIntoChunks,
   expandPath,
+  resolveMemoryDir,
   loadCache,
   saveCache,
+  DAILY_INJECTION_RE,
 } = searchInternals;
 
 const {
@@ -41,6 +44,7 @@ const {
   shouldSearchMemory,
   buildInjectionSection,
   escapeMarker,
+  clearMaintenancePromptFromDaily,
 } = hook._internals;
 
 // ---------------------------------------------------------------------------
@@ -171,9 +175,43 @@ describe('scoreChunk', () => {
     assert.ok(!isNaN(score));
   });
 
+  test('matches keyword tokens with punctuation boundaries', () => {
+    const score = scoreChunk(['node.js', '991.1', 'c++'], 'we use node.js, c++, and version 991.1');
+    assert.ok(score > 0, `expected punctuated token matches, got ${score}`);
+  });
+
   test('score never exceeds 1.0', () => {
     const score = scoreChunk(['project'], 'project project project project project');
     assert.ok(score <= 1.0, `score should not exceed 1.0, got ${score}`);
+  });
+
+  test('coverage gate: returns 0 when >=4 keywords but only 1 hits', () => {
+    const score = scoreChunk(
+      ['alpha', 'beta', 'gamma', 'delta'],
+      'this text only mentions alpha once'
+    );
+    assert.strictEqual(score, 0, `expected 0 (coverage gate), got ${score}`);
+  });
+
+  test('coverage gate: allows >=2 hits with >=4 keywords', () => {
+    const score = scoreChunk(
+      ['alpha', 'beta', 'gamma', 'delta'],
+      'alpha and beta are here'
+    );
+    assert.ok(score > 0, `expected > 0 with 2 hits, got ${score}`);
+  });
+
+  test('coverage gate: does not apply with <4 keywords', () => {
+    const score = scoreChunk(['alpha', 'beta', 'gamma'], 'only alpha here');
+    assert.ok(score > 0, `expected > 0 for <4 keywords with 1 hit, got ${score}`);
+  });
+
+  test('precompiled matchers produce identical score', () => {
+    const keywords = ['node.js', 'c++', 'deploy'];
+    const chunk = 'node.js deploy pipeline with c++ addon';
+    const fromKeywords = scoreChunk(keywords, chunk);
+    const fromMatchers = scoreChunk(buildKeywordMatchers(keywords), chunk);
+    assert.strictEqual(fromMatchers, fromKeywords);
   });
 });
 
@@ -211,6 +249,37 @@ describe('splitIntoChunks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// search.js — DAILY_INJECTION_RE (file exclusion)
+// ---------------------------------------------------------------------------
+
+describe('DAILY_INJECTION_RE', () => {
+  test('matches YYYY-MM-DD.md filenames', () => {
+    assert.ok(DAILY_INJECTION_RE.test('2026-02-11.md'));
+    assert.ok(DAILY_INJECTION_RE.test('2025-01-01.md'));
+  });
+
+  test('does not match regular memory files', () => {
+    assert.ok(!DAILY_INJECTION_RE.test('projects.md'));
+    assert.ok(!DAILY_INJECTION_RE.test('my-notes-2026.md'));
+    assert.ok(!DAILY_INJECTION_RE.test('2026-02-11.json'));
+    assert.ok(!DAILY_INJECTION_RE.test('2026-02-11-notes.md'));
+  });
+});
+
+describe('getMemoryFiles exclusions', () => {
+  test('excludes archive directory from search corpus', async () => {
+    const base = path.join(os.tmpdir(), `adaptive-memory-files-${Date.now()}`);
+    const archiveDir = path.join(base, 'archive');
+    await fsp.mkdir(archiveDir, { recursive: true });
+    await fsp.writeFile(path.join(base, 'keep.md'), 'keep', 'utf8');
+    await fsp.writeFile(path.join(archiveDir, 'old.md'), 'archive', 'utf8');
+    const files = await getMemoryFiles(base);
+    assert.ok(files.some((p) => p.endsWith('keep.md')));
+    assert.ok(!files.some((p) => p.includes(`${path.sep}archive${path.sep}`)));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // search.js — expandPath
 // ---------------------------------------------------------------------------
 
@@ -227,6 +296,61 @@ describe('expandPath', () => {
 
   test('returns relative paths unchanged', () => {
     assert.strictEqual(expandPath('some/path'), 'some/path');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// utils — resolveMemoryDir (portable memory path)
+// ---------------------------------------------------------------------------
+
+describe('resolveMemoryDir', () => {
+  const savedEnv = {};
+
+  function saveEnv() {
+    savedEnv.OPENCLAW_MEMORY_DIR = process.env.OPENCLAW_MEMORY_DIR;
+    savedEnv.OPENCLAW_PROJECT_DIR = process.env.OPENCLAW_PROJECT_DIR;
+  }
+
+  function restoreEnv() {
+    if (savedEnv.OPENCLAW_MEMORY_DIR !== undefined) process.env.OPENCLAW_MEMORY_DIR = savedEnv.OPENCLAW_MEMORY_DIR;
+    else delete process.env.OPENCLAW_MEMORY_DIR;
+    if (savedEnv.OPENCLAW_PROJECT_DIR !== undefined) process.env.OPENCLAW_PROJECT_DIR = savedEnv.OPENCLAW_PROJECT_DIR;
+    else delete process.env.OPENCLAW_PROJECT_DIR;
+  }
+
+  test('uses OPENCLAW_MEMORY_DIR when set', () => {
+    saveEnv();
+    process.env.OPENCLAW_MEMORY_DIR = '/custom/memory';
+    delete process.env.OPENCLAW_PROJECT_DIR;
+    assert.strictEqual(resolveMemoryDir(), '/custom/memory');
+    restoreEnv();
+  });
+
+  test('uses OPENCLAW_PROJECT_DIR/memory when set and OPENCLAW_MEMORY_DIR unset', () => {
+    saveEnv();
+    delete process.env.OPENCLAW_MEMORY_DIR;
+    process.env.OPENCLAW_PROJECT_DIR = '/path/to/clawd';
+    assert.strictEqual(resolveMemoryDir(), path.join('/path', 'to', 'clawd', 'memory'));
+    restoreEnv();
+  });
+
+  test('OPENCLAW_MEMORY_DIR wins over OPENCLAW_PROJECT_DIR', () => {
+    saveEnv();
+    process.env.OPENCLAW_MEMORY_DIR = '/explicit/memory';
+    process.env.OPENCLAW_PROJECT_DIR = '/project';
+    assert.strictEqual(resolveMemoryDir(), '/explicit/memory');
+    restoreEnv();
+  });
+
+  test('falls back to ~/.openclaw/memory when neither env set', () => {
+    saveEnv();
+    delete process.env.OPENCLAW_MEMORY_DIR;
+    delete process.env.OPENCLAW_PROJECT_DIR;
+    const result = resolveMemoryDir();
+    assert.ok(result.startsWith(os.homedir()));
+    assert.ok(result.includes('.openclaw'));
+    assert.ok(result.endsWith('memory') || result.endsWith(path.join('openclaw', 'memory').replace(/\\/g, path.sep)));
+    restoreEnv();
   });
 });
 
@@ -330,14 +454,19 @@ describe('shouldSearchMemory (tech-skip heuristic)', () => {
 // ---------------------------------------------------------------------------
 
 describe('escapeMarker', () => {
-  test('replaces double dashes to prevent HTML comment breakage', () => {
+  test('collapses double dashes to prevent HTML comment breakage', () => {
     const result = escapeMarker('session--123--test');
-    assert.ok(!result.includes('--'));
+    assert.ok(!result.includes('--'), `should not contain --, got: ${result}`);
   });
 
-  test('caps length at 200', () => {
+  test('restricts to safe charset', () => {
+    const result = escapeMarker('key\nnew<line>&foo>bar');
+    assert.ok(/^[A-Za-z0-9._-]*$/.test(result), `unsafe chars in: ${result}`);
+  });
+
+  test('caps length at 128', () => {
     const result = escapeMarker('x'.repeat(300));
-    assert.ok(result.length <= 200);
+    assert.ok(result.length <= 128, `expected <= 128, got ${result.length}`);
   });
 
   test('handles null/undefined gracefully', () => {
@@ -399,6 +528,39 @@ describe('buildInjectionSection (budget enforcement)', () => {
     });
     const wCount = (section.match(/W/g) || []).length;
     assert.ok(wCount <= 800, `expected <= 800 W chars per snippet, got ${wCount}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hook.js — maintenance prompt markers
+// ---------------------------------------------------------------------------
+
+describe('maintenance prompt marker handling', () => {
+  test('clearMaintenancePromptFromDaily strips marker-bounded section', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyPath = path.join(TEST_OUTPUT_DIR, `${today}.md`);
+    await fsp.mkdir(TEST_OUTPUT_DIR, { recursive: true });
+    await fsp.writeFile(
+      dailyPath,
+      [
+        '# Existing content',
+        '',
+        '<!-- adaptive-memory:maintenance:pending -->',
+        'Notice line',
+        // Intentionally omit legacy --- delimiter to validate end-marker behavior.
+        '<!-- adaptive-memory:maintenance:end -->',
+        '',
+        '# Keep this line',
+      ].join('\n'),
+      'utf8'
+    );
+
+    await clearMaintenancePromptFromDaily();
+
+    const after = await fsp.readFile(dailyPath, 'utf8');
+    assert.ok(!after.includes('adaptive-memory:maintenance:pending'));
+    assert.ok(!after.includes('adaptive-memory:maintenance:end'));
+    assert.ok(after.includes('# Keep this line'));
   });
 });
 

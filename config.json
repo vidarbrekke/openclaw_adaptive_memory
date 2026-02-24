@@ -1,13 +1,12 @@
 {
   "enableAdaptiveMemory": true,
   "memoryDir": "~/.openclaw/memory",
+  "coreMemoryPath": null,
   "searchTopK": 3,
   "minRelevanceScore": 0.55,
   "maxInjectedCharsTotal": 4000,
   "maxSnippetCharsEach": 800,
-  "debounceMs": 500,
   "fallbackBehavior": "continue_without_context",
-  "useVectorSearch": true,
   "enableLogging": true,
   "logLevel": "info",
   "maxResultsPerSearch": 12

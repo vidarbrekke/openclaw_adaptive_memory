@@ -86,9 +86,15 @@ echo ""
 echo "✅ All checks passed!"
 echo ""
 echo "Next steps:"
-echo "  1. npm run integration-test    # Run test suite"
-echo "  2. ./install.sh                # Install hook"
-echo "  3. Add hook to ~/.openclaw/openclaw.json"
-echo "  4. openclaw gateway restart    # Restart gateway"
+echo "  1. npm run maintenance-test    # Verify consent-gated maintenance flow"
+echo "  2. npm run integration-test    # Run test suite"
+echo "  3. ./install.sh                # Install hook"
+echo "  4. Restart your gateway process"
 echo "  5. Create new session and test # Verify it works"
 echo ""
+
+# Optional: execute key test commands when script is run directly
+echo "🧪 Running maintenance flow test..."
+npm run maintenance-test
+echo "🧪 Running integration test..."
+npm run integration-test

@@ -1,9 +1,21 @@
 {
   "name": "adaptive-memory",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "On-demand memory loading hook for OpenClaw sessions",
   "main": "hook.js",
-  "keywords": ["openclaw", "memory", "hooks", "session-optimization"],
+  "openclaw": {
+    "hooks": [
+      "./hooks/adaptive-memory"
+    ]
+  },
+  "keywords": [
+    "openclaw",
+    "memory",
+    "hooks",
+    "session-optimization"
+  ],
   "license": "MIT",
-  "engines": { "node": ">=14.0.0" }
+  "engines": {
+    "node": ">=14.0.0"
+  }
 }

@@ -11,6 +11,8 @@ if [ ! -d "$DIST" ]; then
   exit 1
 fi
 
-cp "$ROOT/hook.js" "$ROOT/search.js" "$ROOT/config.json" "$ROOT/install.sh" "$ROOT/LICENSE" "$DIST/"
-echo "Synced hook.js, search.js, config.json, install.sh, LICENSE to dist/adaptive-memory/"
+cp "$ROOT/hook.js" "$ROOT/search.js" "$ROOT/utils.js" "$ROOT/config.json" "$ROOT/install.sh" "$ROOT/LICENSE" "$ROOT/HOOK.md" "$ROOT/handler.js" "$DIST/"
+rm -rf "$DIST/hooks"
+cp -R "$ROOT/hooks" "$DIST/hooks"
+echo "Synced hook.js, search.js, utils.js, config.json, install.sh, LICENSE, HOOK.md, handler.js, hooks/ to dist/adaptive-memory/"
 echo "SKILL.md, INSTALL.md, CHANGELOG.md, package.json in dist are left unchanged (edit there if needed)."
